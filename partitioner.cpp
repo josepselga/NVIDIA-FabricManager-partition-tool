@@ -5,7 +5,6 @@
 #include <limits>
 #include <sstream>
 
-// Assuming this header defines all necessary FM types (fmReturn_t, fmFabricPartitionInfo_t, etc.)
 #include "nv_fm_agent.h" 
 
 void printFmError(const char* operation, fmReturn_t fmReturn) {
@@ -28,38 +27,161 @@ void printMenu() {
     std::cout << "Enter operation: ";
 }
 
+fmReturn_t executeOperation(fmHandle_t fmHandle, unsigned int operation, fmFabricPartitionId_t partitionId)
+{
+    fmReturn_t fmReturn = FM_ST_SUCCESS;
+    fmFabricPartitionList_t partitionList = {0};
+    
+    const fmFabricPartitionId_t PARTITION_ID_NOT_SET = 9999; 
+
+    switch (operation) {
+        case 0: { //list Supported Partitions
+            partitionList.version = fmFabricPartitionList_version;
+            fmReturn = fmGetSupportedFabricPartitions(fmHandle, &partitionList);
+            
+            if (fmReturn != FM_ST_SUCCESS) {
+                printFmError("get partition list", fmReturn);
+            } else {
+                std::cout << "Total supported partitions: " << partitionList.numPartitions << "\n" << std::endl;
+                
+                // table header
+                std::cout << std::left << std::setw(15) << "Partition ID"
+                          << std::left << std::setw(15) << "Number of GPUs"
+                          << std::left << std::setw(25) << "GPU Module ID"
+                          << std::left << std::setw(20) << "Max NVLinks/GPU"
+                          << std::left << "STATUS" << std::endl;
+                std::cout << "--------------------------------------------------------------------------------" << std::endl;
+                
+                // Partition Details
+                for (unsigned int i = 0; i < partitionList.numPartitions; ++i) {
+                    const auto& info = partitionList.partitionInfo[i];
+                    
+                    std::stringstream gpu_list_ss;
+                    unsigned int max_nvlinks = 0; 
+                    bool first_gpu = true;
+                    
+                    for (unsigned int j = 0; j < info.numGpus; ++j) {
+                        if (!first_gpu) gpu_list_ss << ", ";
+                        gpu_list_ss << info.gpuInfo[j].physicalId;
+                        
+                        if (j == 0) max_nvlinks = info.gpuInfo[j].maxNumNvLinks; 
+                        first_gpu = false;
+                    }
+
+                    std::string gpu_list = gpu_list_ss.str();
+                    if (gpu_list.empty()) gpu_list = "N/A";
+
+                    std::cout << std::left << std::setw(15) << info.partitionId
+                              << std::left << std::setw(15) << info.numGpus
+                              << std::left << std::setw(25) << gpu_list
+                              << std::left << std::setw(20) << max_nvlinks 
+                              << std::left << (info.isActive ? "ACTIVE" : "INACTIVE")
+                              << std::endl;
+                }
+            }
+            break;
+        }
+
+        case 1: { // Activate a Partition
+            if (partitionId == PARTITION_ID_NOT_SET) { 
+                 std::cout << "Error: Partition ID (-p) is required for activation." << std::endl;
+                 return FM_ST_BADPARAM;
+            }
+            fmReturn = fmActivateFabricPartition(fmHandle, partitionId);
+            if (fmReturn == FM_ST_SUCCESS) {
+                std::cout << "Successfully sent activation request for partition " << partitionId << std::endl;
+            } else {
+                printFmError("activate partition", fmReturn);
+            }
+            break;
+        }
+
+        case 2: { // Deactivate a Partition
+            if (partitionId == PARTITION_ID_NOT_SET) { 
+                 std::cout << "Error: Partition ID (-p) is required for deactivation." << std::endl;
+                 return FM_ST_BADPARAM;
+            }
+            fmReturn = fmDeactivateFabricPartition(fmHandle, partitionId);
+            if (fmReturn == FM_ST_SUCCESS) {
+                std::cout << "Successfully sent deactivation request for partition " << partitionId << std::endl;
+            } else {
+                printFmError("deactivate partition", fmReturn);
+            }
+            break;
+        }
+
+        default:
+            std::cout << "Error: Invalid operation specified (" << operation << ")." << std::endl;
+            fmReturn = FM_ST_BADPARAM;
+            break;
+    }
+
+    std::cout << std::endl;
+    return fmReturn;
+}
+
 
 int main(int argc, char **argv)
 {
-    fmReturn_t fmReturn;
+    fmReturn_t fmReturn = FM_ST_SUCCESS;
     fmHandle_t fmHandle = NULL;
-    // Set size based on FM_DEVICE_PCI_BUS_ID_BUFFER_SIZE (which is 32) or just 16 for IP
-    char hostIpAddress[16] = {0}; 
-    unsigned int operation = 0;
-    fmFabricPartitionId_t partitionId = 0;
-    fmFabricPartitionList_t partitionList = {0};
+    char hostIpAddress[16] = "127.0.0.1"; // Default ip
+    unsigned int operation = 99;         // Default -> invalid op
+    
+    const fmFabricPartitionId_t PARTITION_ID_NOT_SET = 9999; 
+    fmFabricPartitionId_t partitionId = PARTITION_ID_NOT_SET;
+    
+    bool runInteractive = (argc == 1); 
 
-    std::cout << "Please input an IP address to connect to (default: 127.0.0.1). Press Enter to accept default: ";
-    std::string buffer;
-    std::getline(std::cin, buffer);
-
-    if (buffer.empty()) {
-        strncpy(hostIpAddress, "127.0.0.1", sizeof(hostIpAddress) - 1);
-        hostIpAddress[sizeof(hostIpAddress) - 1] = '\0';
-    } else {
-        if (buffer.length() >= sizeof(hostIpAddress)) {
-            std::cout << "Invalid IP address (too long).\n" << std::endl;
-            return FM_ST_BADPARAM; 
+    //parse cli args
+    for (int i = 1; i < argc; ++i) {
+        if ((strcmp(argv[i], "-i") == 0 || strcmp(argv[i], "--ip") == 0) && i + 1 < argc) {
+            strncpy(hostIpAddress, argv[i+1], sizeof(hostIpAddress) - 1);
+            hostIpAddress[sizeof(hostIpAddress) - 1] = '\0';
+            i++; 
+            runInteractive = false;
+        } else if ((strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--operation") == 0) && i + 1 < argc) {
+            operation = std::stoul(argv[i+1]); 
+            i++; 
+            runInteractive = false;
+        } else if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--partition") == 0) && i + 1 < argc) {
+            partitionId = std::stoul(argv[i+1]); 
+            i++; 
+        } else if (!runInteractive) {
+            std::cout << "Usage: " << argv[0] << " [-i <IP>] -o <OP> [-p <ID>]\n"
+                      << "  -i, --ip <IP>      : IP address of Fabric Manager (default: 127.0.0.1)\n"
+                      << "  -o, --operation <N>: 0=List, 1=Activate, 2=Deactivate\n"
+                      << "  -p, --partition <ID>: Partition ID (required for Activate/Deactivate)\n"
+                      << "Running without options starts interactive mode.\n";
+            return FM_ST_BADPARAM;
         }
-        strncpy(hostIpAddress, buffer.c_str(), sizeof(hostIpAddress) - 1);
-        hostIpAddress[sizeof(hostIpAddress) - 1] = '\0';
     }
+    
+    // handle Connection based on mode
+    
+    // If running in CLI mode
+    if (!runInteractive && operation != 99) {
+        std::cout << "Connecting to Fabric Manager at " << hostIpAddress << "..." << std::endl;
+    } else {
+        // Interactive mode input
+        std::string buffer;
+        std::cout << "Please input an IP address to connect to (default: 127.0.0.1). Press Enter to accept default: ";
+        std::getline(std::cin, buffer);
 
-    /* Initialize Fabric Manager API interface library */
+        if (!buffer.empty()) {
+            if (buffer.length() >= sizeof(hostIpAddress)) {
+                std::cout << "Invalid IP address (too long).\n" << std::endl;
+                return FM_ST_BADPARAM; 
+            }
+            strncpy(hostIpAddress, buffer.c_str(), sizeof(hostIpAddress) - 1);
+            hostIpAddress[sizeof(hostIpAddress) - 1] = '\0';
+        }
+    }
+    
     fmReturn = fmLibInit();
     if (FM_ST_SUCCESS != fmReturn) {
-        std::cout << "Failed to initialize Fabric Manager API interface library." << std::endl;
-        return fmReturn;
+         std::cout << "Failed to initialize Fabric Manager API interface library." << std::endl;
+         return fmReturn;
     }
 
     fmConnectParams_t connectParams = {0}; 
@@ -77,123 +199,49 @@ int main(int argc, char **argv)
     }
     
     std::cout << "Successfully connected to Fabric Manager at " << hostIpAddress << std::endl;
-
-    while (true)
-    {
-        printMenu();
-        if (!(std::cin >> operation)) {
-            std::cout << "Invalid input. Please enter a number.\n" << std::endl;
-            clearCin(); 
-            continue;
-        }
-        
-        if (operation == 3) {
-            std::cout << "Exiting." << std::endl;
-            break; 
-        }
-
-        partitionId = 0; 
-        if (operation == 1 || operation == 2) {
-            std::cout << "Input Shared Fabric Partition ID: \n";
-            if (!(std::cin >> partitionId)) {
-                 std::cout << "Invalid input. Please enter a number.\n" << std::endl;
-                 clearCin(); 
-                 continue;
-            }
-
-            if (partitionId >= FM_MAX_FABRIC_PARTITIONS) {
-                std::cout << "Invalid partition ID (must be < " << FM_MAX_FABRIC_PARTITIONS << ")." << std::endl;
-                clearCin();
+    
+    if (!runInteractive && operation != 99) {
+        // Non-interactive mode: Run the single command
+        fmReturn = executeOperation(fmHandle, operation, partitionId);
+    } else {
+        // Interactive mode: Run the menu loop
+        while (true)
+        {
+            printMenu();
+            if (!(std::cin >> operation)) {
+                std::cout << "Invalid input. Please enter a number.\n" << std::endl;
+                clearCin(); 
                 continue;
             }
+            
+            if (operation == 3) {
+                std::cout << "Exiting." << std::endl;
+                break; 
+            }
+            
+            partitionId = PARTITION_ID_NOT_SET;
+            if (operation == 1 || operation == 2) {
+                std::cout << "Input Shared Fabric Partition ID: \n";
+                if (!(std::cin >> partitionId)) { 
+                     std::cout << "Invalid input. Please enter a number.\n" << std::endl;
+                     clearCin(); 
+                     continue;
+                }
+                if (partitionId >= FM_MAX_FABRIC_PARTITIONS) {
+                    std::cout << "Invalid partition ID (too large)." << std::endl;
+                    clearCin();
+                    continue;
+                }
+            }
+            std::cout << std::endl; 
+            
+            executeOperation(fmHandle, operation, partitionId);
         }
-        std::cout << std::endl; 
-
-        switch (operation) {
-            case 0: // List Supported Partitions
-                partitionList.version = fmFabricPartitionList_version;
-                fmReturn = fmGetSupportedFabricPartitions(fmHandle, &partitionList);
-                
-                if (fmReturn != FM_ST_SUCCESS) {
-                    printFmError("get partition list", fmReturn);
-                } else {
-                    std::cout << "Total supported partitions: " << partitionList.numPartitions << "\n" << std::endl;
-                    
-                    // --- Display Table Header matching the image ---
-                    std::cout << std::left << std::setw(15) << "Partition ID"
-                              << std::left << std::setw(15) << "N of GPUs"
-                              << std::left << std::setw(25) << "Module IDs"
-                              << std::left << "Max NVLinks per GPU" << std::endl;
-                    std::cout << "----------------------------------------------------------------" << std::endl;
-                    
-                    // --- Display Partition Details ---
-                    for (unsigned int i = 0; i < partitionList.numPartitions; ++i) {
-                        const auto& info = partitionList.partitionInfo[i];
-                        
-                        std::stringstream gpu_list_ss;
-                        unsigned int max_nvlinks = 0; 
-                        bool first_gpu = true;
-                        
-                        // Build GPU List string AND capture the max_nvlinks value
-                        for (unsigned int j = 0; j < info.numGpus; ++j) {
-                            if (!first_gpu) {
-                                gpu_list_ss << ", ";
-                            }
-                            // Accessing the physicalId (GPU ID) from the sub-structure
-                            gpu_list_ss << info.gpuInfo[j].physicalId;
-                            
-                            if (j == 0) {
-                                // Use the max value from the first GPU in the partition
-                                max_nvlinks = info.gpuInfo[j].maxNumNvLinks; 
-                            }
-                            first_gpu = false;
-                        }
-
-                        std::string gpu_list = gpu_list_ss.str();
-                        if (gpu_list.empty()) {
-                            gpu_list = "N/A";
-                        }
-
-                        // Display the row using formatting and the retrieved data
-                        std::cout << std::left << std::setw(15) << info.partitionId
-                                  << std::left << std::setw(15) << info.numGpus
-                                  << std::left << std::setw(25) << gpu_list
-                                  << std::left << max_nvlinks 
-                                  // Optional: Display the status on a new line or at the end
-                                  << " (" << (info.isActive ? "ACTIVE" : "INACTIVE") << ")"
-                                  << std::endl;
-                    }
-                }
-                break;
-
-            case 1: // Activate a Partition
-                fmReturn = fmActivateFabricPartition(fmHandle, partitionId);
-                if (fmReturn == FM_ST_SUCCESS) {
-                    std::cout << "Successfully sent activation request for partition " << partitionId << std::endl;
-                } else {
-                    printFmError("activate partition", fmReturn);
-                }
-                break;
-
-            case 2: // Deactivate a Partition
-                fmReturn = fmDeactivateFabricPartition(fmHandle, partitionId);
-                if (fmReturn == FM_ST_SUCCESS) {
-                    std::cout << "Successfully sent deactivation request for partition " << partitionId << std::endl;
-                } else {
-                    printFmError("deactivate partition", fmReturn);
-                }
-                break;
-
-            default:
-                std::cout << "Invalid operation. Please select from the menu." << std::endl;
-                break;
-        }
-        std::cout << std::endl; 
     }
 
     /* Clean */
     fmDisconnect(fmHandle);
     fmLibShutdown();
     
-    return FM_ST_SUCCESS; 
+    return fmReturn; 
 }
