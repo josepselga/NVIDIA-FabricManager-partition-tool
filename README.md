@@ -1,6 +1,6 @@
 Non-interactive mode:
 ```
-root@localhost:~/NVIDIA-FabricManager-partition-tool# ./partitioner -o23 -p 5
+root@localhost:~/NVIDIA-FabricManager-partition-tool# ./partitioner -h
 Usage: ./partitioner [-i <IP>] -o <OP> [-p <ID>]
   -i, --ip <IP>      : IP address of Fabric Manager (default: 127.0.0.1)
   -o, --operation <N>: 0=List, 1=Activate, 2=Deactivate
