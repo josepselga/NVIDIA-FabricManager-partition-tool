@@ -1,4 +1,9 @@
-Non-interactive mode:
+# NVIDIA Fabric Manager Partition Tool
+
+c++ tool to perform NVIDIA Fabric Manager operations, extending the functionalities from [NVIDIA sample code](https://docs.nvidia.com/datacenter/tesla/fabric-manager-user-guide/index.html#sample-code).
+
+---
+## Non-interactive mode:
 ```
 root@localhost:~/NVIDIA-FabricManager-partition-tool# ./partitioner -h
 Usage: ./partitioner [-i <IP>] -o <OP> [-p <ID>]
@@ -17,5 +22,5 @@ Successfully sent deactivation request for partition 5
 
 
 
-Interactive mode:
+## Interactive mode:
 <img width="952" height="725" alt="image" src="https://github.com/user-attachments/assets/287d6500-9348-47ea-85a0-f9a325bfadcf" />
